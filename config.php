@@ -15,6 +15,10 @@ return [
     'log_file' => 'data/log.txt',
     'message_max_length' => 50000,
     'rate_limit' => 50,
+    'poll_batch_limit' => 100,
+    'history_page_max' => 200,
+    'presence_update_interval' => 60,
+    'presence_sync_interval_ms' => 30000,
 
     // 安全配置
     'admin_password' => 'admin123',

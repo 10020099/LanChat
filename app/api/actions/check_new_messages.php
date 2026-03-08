@@ -15,6 +15,8 @@ $minPublicId = intval($_POST['minPublicId'] ?? 0);
 $maxPublicId = intval($_POST['maxPublicId'] ?? 0);
 $minPrivateId = intval($_POST['minPrivateId'] ?? 0);
 $maxPrivateId = intval($_POST['maxPrivateId'] ?? 0);
+$pollBatchLimit = max(1, intval($config['poll_batch_limit'] ?? 100));
+$includePresence = filter_var($_POST['include_presence'] ?? 'false', FILTER_VALIDATE_BOOLEAN);
 
 try {
     $mysqli = get_db_connection();
@@ -35,11 +37,12 @@ try {
             FROM public_messages
             WHERE id > ? AND recalled = FALSE
             ORDER BY id ASC
+            LIMIT ?
         ");
         if (!$stmt) {
             throw new Exception('公聊查询准备失败');
         }
-        $stmt->bind_param("i", $lastPublicId);
+        $stmt->bind_param("ii", $lastPublicId, $pollBatchLimit);
     } else {
         // 兼容旧客户端：按 timestamp 拉取
         $stmt = $mysqli->prepare("
@@ -55,12 +58,13 @@ try {
                 recalled
             FROM public_messages
             WHERE timestamp > FROM_UNIXTIME(?) AND recalled = FALSE
-            ORDER BY timestamp ASC
+            ORDER BY timestamp ASC, id ASC
+            LIMIT ?
         ");
         if (!$stmt) {
             throw new Exception('公聊查询准备失败');
         }
-        $stmt->bind_param("i", $lastPublicTimestamp);
+        $stmt->bind_param("ii", $lastPublicTimestamp, $pollBatchLimit);
     }
 
     $stmt->execute();
@@ -153,11 +157,12 @@ try {
                 WHERE ((pm.sender_id = ? AND pm.receiver_id = ?) OR (pm.sender_id = ? AND pm.receiver_id = ?))
                 AND pm.id > ? AND pm.recalled = FALSE
                 ORDER BY pm.id ASC
+                LIMIT ?
             ");
             if (!$stmt) {
                 throw new Exception('私聊查询准备失败');
             }
-            $stmt->bind_param("iiiii", $_SESSION['user_id'], $currentReceiverId, $currentReceiverId, $_SESSION['user_id'], $lastPrivateId);
+            $stmt->bind_param("iiiiii", $_SESSION['user_id'], $currentReceiverId, $currentReceiverId, $_SESSION['user_id'], $lastPrivateId, $pollBatchLimit);
         } else {
             // 兼容旧客户端：按 timestamp 拉取
             $stmt = $mysqli->prepare("
@@ -166,12 +171,13 @@ try {
                 JOIN users u1 ON pm.sender_id = u1.id
                 WHERE ((pm.sender_id = ? AND pm.receiver_id = ?) OR (pm.sender_id = ? AND pm.receiver_id = ?))
                 AND pm.timestamp > FROM_UNIXTIME(?) AND pm.recalled = FALSE
-                ORDER BY pm.timestamp ASC
+                ORDER BY pm.timestamp ASC, pm.id ASC
+                LIMIT ?
             ");
             if (!$stmt) {
                 throw new Exception('私聊查询准备失败');
             }
-            $stmt->bind_param("iiiii", $_SESSION['user_id'], $currentReceiverId, $currentReceiverId, $_SESSION['user_id'], $lastPrivateTimestamp);
+            $stmt->bind_param("iiiiii", $_SESSION['user_id'], $currentReceiverId, $currentReceiverId, $_SESSION['user_id'], $lastPrivateTimestamp, $pollBatchLimit);
         }
 
         $stmt->execute();
@@ -286,6 +292,8 @@ try {
         $stmt->close();
     }
 
+    $userPresence = $includePresence ? getUserPresenceMap($mysqli, intval($_SESSION['user_id'])) : null;
+
     $mysqli->close();
 
     echo json_encode([
@@ -293,7 +301,8 @@ try {
         'newPublicMessages' => $parsedPublicMessages,
         'newPrivateMessages' => $parsedPrivateMessages,
         'recalledPublicIds' => $recalledPublicIds,
-        'recalledPrivateIds' => $recalledPrivateIds
+        'recalledPrivateIds' => $recalledPrivateIds,
+        'userPresence' => $userPresence
     ]);
 } catch (Throwable $e) {
     if (isset($mysqli) && $mysqli instanceof mysqli) {

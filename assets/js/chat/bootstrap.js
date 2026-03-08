@@ -1,7 +1,7 @@
         // --- State Variables ---
 	        let latestPublicTimestamp = 0;
 	        let latestPrivateTimestamp = 0;
-	        // 使用 ID 游标避免同秒多消息丢失（timestamp 仅用于展示/兼容）
+	        // 使用 ID 游标避免同秒多消息丢失（timestamp 仅用于展�?兼容�?
 	        let latestPublicId = 0;
 	        let latestPrivateId = 0;
 	        let pollingInterval = null;
@@ -15,26 +15,27 @@
 	        let privateLoadToken = 0;
 	        let publicLoadController = null;
 	        let privateLoadController = null;
+	        let lastPresenceSyncAt = 0;
 
 	        // --- Cache Configuration ---
-        const CACHE_EXPIRY_DAYS = 7; // 缓存有效期：7天
-        const CACHE_VERSION = 'v1'; // 缓存版本，用于清理旧缓存
+        const CACHE_EXPIRY_DAYS = 7; // 缓存有效期：7�?        const CACHE_VERSION = 'v1'; // 缓存版本，用于清理旧缓存
         const MAX_UPLOAD_BYTES = 4 * 1024 * 1024; // 4MB 上传限制
+        const PRESENCE_SYNC_INTERVAL_MS = Number(window.VENCHAT_CONFIG.presenceSyncIntervalMs) || 30000;
 
         // --- Cache Management Functions ---
-        // 生成缓存键，确保用户ID和聊天类型隔离
+        // 生成缓存键，确保用户ID和聊天类型隔�?
         function getCacheKey(type, userId = null) {
             const currentUser = window.VENCHAT_CONFIG.userId;
             if (type === 'public') {
                 return `venchat_${CACHE_VERSION}_user${currentUser}_public`;
             } else if (type === 'private' && userId) {
-                // 私聊缓存键包含当前用户ID和对方用户ID，确保不会混淆
+                // 私聊缓存键包含当前用户ID和对方用户ID，确保不会混�?
                 return `venchat_${CACHE_VERSION}_user${currentUser}_private_${userId}`;
             }
             return null;
         }
 
-        // 保存消息到缓存
+        // 保存消息到缓�?
         function saveMessagesToCache(messages, type, userId = null) {
             try {
                 const key = getCacheKey(type, userId);
@@ -56,7 +57,7 @@
             }
         }
 
-        // 从缓存加载消息
+        // 从缓存加载消�?
         function loadMessagesFromCache(type, userId = null) {
             try {
                 const key = getCacheKey(type, userId);
@@ -67,7 +68,7 @@
 
                 const cacheData = JSON.parse(cached);
                 
-                // 验证缓存数据的完整性和正确性
+                // 验证缓存数据的完整性和正确�?
                 if (!cacheData || !cacheData.messages || !Array.isArray(cacheData.messages)) {
                     return null;
                 }
@@ -85,7 +86,7 @@
                     return null;
                 }
 
-                // 检查缓存是否过期
+                // 检查缓存是否过�?
                 const ageInDays = (Date.now() - cacheData.timestamp) / (1000 * 60 * 60 * 24);
                 if (ageInDays > CACHE_EXPIRY_DAYS) {
                     localStorage.removeItem(key);
@@ -99,7 +100,7 @@
             }
         }
 
-        // 清理旧版本缓存
+        // 清理旧版本缓�?
         function cleanOldCaches() {
             try {
                 const currentUser = window.VENCHAT_CONFIG.userId;
@@ -114,7 +115,7 @@
                 
                 keysToRemove.forEach(key => localStorage.removeItem(key));
                 if (keysToRemove.length > 0) {
-                    console.log(`清理了 ${keysToRemove.length} 个旧缓存`);
+                    console.log(`清理�?${keysToRemove.length} 个旧缓存`);
                 }
             } catch (e) {
                 console.error('清理缓存失败:', e);
@@ -122,18 +123,44 @@
         }
 
         // --- Online Status Functions ---
-        // 计算在线状态：返回 'online', 'away', 或 'offline'
-        function calculateOnlineStatus(lastSeenStr) {
-            if (!lastSeenStr) return 'offline';
+        function parseLastSeenValue(lastSeenValue) {
+            if (lastSeenValue === null || lastSeenValue === undefined || lastSeenValue === '') {
+                return null;
+            }
 
-            const lastSeen = new Date(lastSeenStr);
+            if (typeof lastSeenValue === 'number' && Number.isFinite(lastSeenValue)) {
+                return new Date(lastSeenValue * 1000);
+            }
+
+            const normalized = String(lastSeenValue).trim();
+            if (!normalized) {
+                return null;
+            }
+
+            if (/^\d+$/.test(normalized)) {
+                return new Date(Number(normalized) * 1000);
+            }
+
+            const parsed = new Date(normalized.replace(' ', 'T'));
+            if (Number.isNaN(parsed.getTime())) {
+                return null;
+            }
+
+            return parsed;
+        }
+
+        // 计算在线状态：返回 'online', 'away', �?'offline'
+        function calculateOnlineStatus(lastSeenStr) {
+            const lastSeen = parseLastSeenValue(lastSeenStr);
+            if (!lastSeen) return 'offline';
+
             const now = new Date();
             const diffMs = now - lastSeen;
             const diffMins = diffMs / (1000 * 60);
 
             if (diffMins < 5) return 'online';      // 5分钟内为在线
             if (diffMins < 15) return 'away';       // 5-15分钟为离开
-            return 'offline';                        // 15分钟以上为离线
+            return 'offline';                        // 15分钟以上为离�?
         }
 
         // 更新用户在线状态指示器
@@ -144,33 +171,46 @@
             const status = calculateOnlineStatus(lastSeenStr);
             statusSpan.className = 'online-status ' + status;
 
-            // 设置 title 属性显示详细信息
-            if (lastSeenStr) {
-                const lastSeen = new Date(lastSeenStr);
-                const now = new Date();
-                const diffMs = now - lastSeen;
-                const diffMins = Math.floor(diffMs / (1000 * 60));
-                const diffHours = Math.floor(diffMins / 60);
-                const diffDays = Math.floor(diffHours / 24);
-
-                let timeStr = '';
-                if (diffMins < 1) {
-                    timeStr = '刚刚在线';
-                } else if (diffMins < 60) {
-                    timeStr = `${diffMins}分钟前在线`;
-                } else if (diffHours < 24) {
-                    timeStr = `${diffHours}小时前在线`;
-                } else {
-                    timeStr = `${diffDays}天前在线`;
-                }
-
-                statusSpan.title = timeStr;
-            } else {
-                statusSpan.title = '从未在线';
+            const lastSeen = parseLastSeenValue(lastSeenStr);
+            if (!lastSeen) {
+                statusSpan.title = '��δ����';
+                return;
             }
+
+            const now = new Date();
+            const diffMs = now - lastSeen;
+            const diffMins = Math.floor(diffMs / (1000 * 60));
+            const diffHours = Math.floor(diffMins / 60);
+            const diffDays = Math.floor(diffHours / 24);
+
+            let timeStr = '';
+            if (diffMins < 1) {
+                timeStr = '�ո�����';
+            } else if (diffMins < 60) {
+                timeStr = diffMins + '����ǰ����';
+            } else if (diffHours < 24) {
+                timeStr = diffHours + 'Сʱǰ����';
+            } else {
+                timeStr = diffDays + '��ǰ����';
+            }
+
+            statusSpan.title = timeStr;
         }
 
-        // 更新所有用户的在线状态
+        function applyUserPresenceMap(presenceMap) {
+            if (!presenceMap || typeof presenceMap !== 'object') return;
+
+            Object.entries(presenceMap).forEach(([userId, lastSeen]) => {
+                const userElement = document.querySelector(`.user-item[data-user-id="${userId}"]`);
+                if (!userElement) return;
+
+                const normalizedValue = lastSeen === null || lastSeen === undefined ? '' : String(lastSeen);
+                userElement.setAttribute('data-last-seen', normalizedValue);
+                updateUserOnlineStatus(userElement, normalizedValue);
+            });
+        }
+
+        // 更新所有用户的在线状�?
         function updateAllUserOnlineStatus() {
             const userItems = document.querySelectorAll('.user-item[data-user-id]');
             userItems.forEach(item => {
@@ -246,11 +286,11 @@
         const attachmentSize = document.getElementById('attachmentSize');
         const removeAttachmentBtn = document.getElementById('removeAttachmentBtn');
 
-	        let currentDisplayedMessages = []; // 存储当前显示的消息数据
-	        const displayedMessageIds = new Set(); // O(1) 去重与快速判断
+	        let currentDisplayedMessages = []; // 存储当前显示的消息数�?
+	        const displayedMessageIds = new Set(); // O(1) 去重与快速判�?
 
         // --- HSL 主题生成系统 ---
-        // 旧 theme 索引到 hue/mode 的映射表（向后兼容）
+        // �?theme 索引�?hue/mode 的映射表（向后兼容）
         const THEME_MIGRATION_MAP = [
             { hue: 217, mode: 'light' },  // 0: 默认白天
             { hue: 217, mode: 'dark' },   // 1: 默认夜晚
@@ -264,7 +304,7 @@
             { hue: 25, mode: 'dark' },    // 9: 橙色夜晚
         ];
 
-        // 将旧的 theme 索引格式迁移为新的 hue/mode 格式
+        // 将旧�?theme 索引格式迁移为新�?hue/mode 格式
         function migrateOldSettings(settings) {
             if (settings.hue !== undefined && settings.mode !== undefined) {
                 return settings; // 已经是新格式
@@ -278,7 +318,7 @@
             };
         }
 
-        // 根据色相值和明暗模式生成完整的 17 个主题颜色
+        // 根据色相值和明暗模式生成完整�?17 个主题颜�?
         function generateThemeFromHue(hue, mode) {
             const h = Math.round(hue) % 360;
             if (mode === 'dark') {

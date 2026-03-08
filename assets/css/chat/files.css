@@ -469,6 +469,18 @@
     font-size: 0.9rem;
 }
 
+.file-preview-content.has-embedded-preview {
+    white-space: normal;
+    font-family: inherit;
+    font-size: 1rem;
+    line-height: normal;
+}
+
+.file-preview-pdf {
+    min-height: 420px;
+    background: #ffffff;
+}
+
 .file-preview-content p {
     margin: 0.5em 0;
 }

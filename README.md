@@ -103,6 +103,30 @@ Table 'venlanchat.public_messages' doesn't exist
 
 迁移脚本会读取 `data/messages.json` 并写入 `public_messages` 表。
 
+## 架构概览
+
+经典 PHP 单体应用，采用 **薄代理入口 + 分层架构** 设计：
+
+```
+用户请求 --> 根目录入口 (index.php / api.php / login.php / ...)
+                |
+                v
+        app/entrypoints/public/*.php  (真正的入口逻辑)
+                |
+                v
+        app/bootstrap.php  (会话、CSRF、配置、Parsedown)
+                |
+        --------+--------
+        |                |
+     GET 请求          POST 请求
+        |                |
+        v                v
+  app/views/chat.php   app/api/actions/*.php
+        |                |
+        v                v
+  内联 CSS + JS       JSON 响应
+```
+
 ## 目录结构
 
 入口脚本已按职责归类到 `app/entrypoints/`，根目录同名文件仍保留为兼容入口（仅做转发），现有 URL 不需要调整。
@@ -112,13 +136,32 @@ Table 'venlanchat.public_messages' doesn't exist
 - `app/api/actions/`：API 动作处理（AJAX）
 - `app/services/`：业务服务（消息、用户、设置等）
 - `app/helpers/`：通用工具（安全、日志、限流等）
+- `app/views/`：视图模板
 - `assets/css/`：样式（页面内联加载）
 - `assets/js/`：前端逻辑（页面内联加载）
+- `lib/`：第三方库（Parsedown）
+- `scripts/`：部署工具（FTP 增量同步）
 - `docker/`：Docker 初始化与部署相关文件
 - `data/`：运行时数据与错误日志（会挂载持久化）
 - `uploads/`：上传文件（会挂载持久化）
 - `avatars/`：头像文件（会挂载持久化）
 - `logs/`：应用日志（会挂载持久化）
+
+## 关键文件速查
+
+| 需求 | 文件 |
+|------|------|
+| 数据库连接配置 | `config.php` |
+| 会话 / CSRF 逻辑 | `app/bootstrap.php` |
+| Markdown 解析 | `app/helpers/security.php` |
+| 速率限制规则 | `app/helpers/rate_limiter.php` |
+| 文件上传 | `app/api/actions/upload_file.php` |
+| 用户认证 | `app/entrypoints/public/login.php`、`register.php` |
+| 管理面板 | `app/entrypoints/maintenance/admin.php` |
+| 消息轮询 | `app/api/actions/check_new_messages.php` |
+| 前端消息渲染 | `assets/js/chat/messages.js` |
+| 前端 UI 交互 | `assets/js/chat/ui.js` |
+| 主题 / 设置 | `assets/js/chat/settings.js`、`app/services/settings.php` |
 
 ## 日志与排错
 
@@ -138,6 +181,48 @@ docker compose logs -f
 ```bash
 docker compose exec -T db mysql -u <user> -p<pass> -D <db> -e "SHOW TABLES;"
 ```
+
+## FTP 增量部署（可选）
+
+如果不使用 Docker，可通过 FTP 增量同步部署：
+
+```bash
+cd scripts
+python3 ftp_sync.py
+```
+
+- 基于 SHA-256 哈希仅上传修改过的文件
+- `FTP_SYNC_FORCE=1` 强制上传所有文件
+- `FTP_SYNC_DIR_MODE=755` / `FTP_SYNC_FILE_MODE=644` 控制权限
+
+## 编码规范
+
+### PHP
+
+| 类型 | 规范 | 示例 |
+|------|------|------|
+| 函数 | `snake_case` | `get_db_connection()` |
+| 变量 | `snake_case` | `$current_user` |
+| 类 | `PascalCase` | `Parsedown` |
+| 常量 | `UPPER_SNAKE_CASE` | `THEME_MIGRATION_MAP` |
+
+### JavaScript
+
+| 类型 | 规范 | 示例 |
+|------|------|------|
+| 函数 | `camelCase` | `sendMessage()` |
+| 变量 | `camelCase` | `selectedReceiverId` |
+| 类 | `PascalCase` | `VirtualScrollManager` |
+| 常量 | `UPPER_SNAKE_CASE` | `MAX_UPLOAD_BYTES` |
+
+### 安全规范
+
+1. 所有 POST 请求必须验证 CSRF token（`hash_equals`）
+2. 数据库操作必须使用预处理语句（`prepare` + `bind_param`）
+3. 用户内容通过 `customParse()` 安全解析，Parsedown 开启 `setSafeMode(true)`
+4. 登录成功后调用 `session_regenerate_id(true)`
+5. 文件上传验证 MIME 类型、文件大小，使用随机文件名
+6. 通过 `checkRateLimit()` 防止 API 滥用
 
 ## 安全建议（生产环境必须做）
 

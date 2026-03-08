@@ -22,23 +22,21 @@
             }
         };
     </script>
-        <style>
 <?php
 $cssFiles = [
-    __DIR__ . '/../../assets/css/chat/base.css',
-    __DIR__ . '/../../assets/css/chat/responsive.css',
-    __DIR__ . '/../../assets/css/chat/markdown.css',
-    __DIR__ . '/../../assets/css/chat/settings.css',
-    __DIR__ . '/../../assets/css/chat/files.css',
+    'assets/css/chat/base.css',
+    'assets/css/chat/responsive.css',
+    'assets/css/chat/markdown.css',
+    'assets/css/chat/settings.css',
+    'assets/css/chat/files.css',
 ];
 
-foreach ($cssFiles as $cssPath) {
-    if (is_readable($cssPath)) {
-        echo file_get_contents($cssPath);
-    }
-}
+foreach ($cssFiles as $cssPath):
+    $fullPath = __DIR__ . '/../../' . $cssPath;
+    $version = is_readable($fullPath) ? ('?v=' . filemtime($fullPath)) : '';
 ?>
-        </style>
+        <link rel="stylesheet" href="<?php echo htmlspecialchars($cssPath . $version, ENT_QUOTES, 'UTF-8'); ?>">
+<?php endforeach; ?>
 
 </head>
 <body>
@@ -58,7 +56,7 @@ foreach ($cssFiles as $cssPath) {
                     <div class="user-name">公共聊天</div>
                 </div>
                 <?php foreach (getUserList() as $user): ?>
-                <div class="user-item" data-chat-type="private" data-user-id="<?php echo $user['id']; ?>" data-user-name="<?php echo htmlspecialchars($user['username']); ?>" data-last-seen="<?php echo htmlspecialchars($user['last_seen'] ?? ''); ?>">
+                <div class="user-item" data-chat-type="private" data-user-id="<?php echo $user['id']; ?>" data-user-name="<?php echo htmlspecialchars($user['username']); ?>" data-last-seen="<?php echo !empty($user['last_seen']) ? (int)strtotime($user['last_seen']) : ''; ?>">
                     <img src="<?php echo $user['avatar']; ?>" class="avatar" alt="<?php echo htmlspecialchars($user['username']); ?>">
                     <div class="user-name">
                         <?php echo htmlspecialchars($user['username']); ?>
@@ -89,7 +87,7 @@ foreach ($cssFiles as $cssPath) {
                 </div>
                 <div class="input-row">
                     <div class="file-upload-input-btn">
-                        <input type="file" id="messageFileInput" accept="image/*" hidden>
+                        <input type="file" id="messageFileInput" hidden>
                         <button type="button" id="messageFileBtn" class="input-action-btn" title="上传附件">
                             <i class="fas fa-paperclip"></i>
                         </button>

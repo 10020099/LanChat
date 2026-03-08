@@ -1,29 +1,40 @@
 <?php
-// 更新用户最后在线时间
 updateLastSeen($_SESSION['user_id']);
 
-// 分页参数
 $limit = intval($_POST['limit'] ?? 50);
 $before_id = intval($_POST['before_id'] ?? 0);
+$historyPageMax = max(1, intval($config['history_page_max'] ?? 200));
+$limit = max(1, min($limit, $historyPageMax));
 
-// 限制每页最大数量，防止恶意请求
-$limit = max(1, min($limit, 10000));
+$parseMessage = static function ($message) use ($parsedown) {
+    if (!is_string($message)) {
+        return $message;
+    }
+
+    $trimmed = trim($message);
+    if (strpos($trimmed, '{') === 0) {
+        $decoded = json_decode($message, true);
+        if ($decoded && isset($decoded['type']) && $decoded['type'] === 'file') {
+            return $message;
+        }
+    }
+
+    return customParseAllowHtml($message, $parsedown);
+};
 
 try {
     $mysqli = get_db_connection();
 
-    // 构建查询条件
-    $where = "WHERE recalled = FALSE";
+    $where = 'WHERE recalled = FALSE';
     $params = [];
-    $types = "";
+    $types = '';
 
     if ($before_id > 0) {
-        $where .= " AND id < ?";
+        $where .= ' AND id < ?';
         $params[] = $before_id;
-        $types .= "i";
+        $types .= 'i';
     }
 
-    // 查询消息
     $query = "
         SELECT
             id,
@@ -32,7 +43,7 @@ try {
             avatar,
             message,
             reply_to_id,
-            UNIX_TIMESTAMP(timestamp) as timestamp,
+            UNIX_TIMESTAMP(timestamp) AS timestamp,
             ip,
             recalled
         FROM public_messages
@@ -41,113 +52,84 @@ try {
         LIMIT ?
     ";
 
-    $params[] = $limit + 1; // 多查一条用于判断是否有更多
-    $types .= "i";
+    $params[] = $limit + 1;
+    $types .= 'i';
 
     $stmt = $mysqli->prepare($query);
     if (!$stmt) {
-        $mysqli->close();
-        echo json_encode(['success' => false, 'message' => '查询失败']);
-        exit;
+        throw new Exception('查询失败');
     }
 
-    if (!empty($params)) {
-        $stmt->bind_param($types, ...$params);
-    }
-
+    $stmt->bind_param($types, ...$params);
     $stmt->execute();
     $result = $stmt->get_result();
 
-    $messages = [];
+    $rows = [];
+    $replyIds = [];
     $hasMore = false;
 
-    $count = 0;
     while ($row = $result->fetch_assoc()) {
-        $count++;
-        if ($count > $limit) {
+        if (count($rows) >= $limit) {
             $hasMore = true;
             break;
         }
 
-        // 如果有 reply_to_id，查询被回复的消息
-        $reply_to = null;
-        if ($row['reply_to_id']) {
-            $reply_stmt = $mysqli->prepare("
-                SELECT username, avatar, message
-                FROM public_messages
-                WHERE id = ?
-            ");
-            $reply_stmt->bind_param("i", $row['reply_to_id']);
-            $reply_stmt->execute();
-            if ($reply_result = $reply_stmt->get_result()->fetch_assoc()) {
-                $reply_to = [
-                    'message' => $reply_result['message'],
-                    'username' => $reply_result['username'],
-                    'avatar' => $reply_result['avatar']
+        $rows[] = $row;
+        if (!empty($row['reply_to_id'])) {
+            $replyIds[(int)$row['reply_to_id']] = true;
+        }
+    }
+    $stmt->close();
+
+    $replyMap = [];
+    if (!empty($replyIds)) {
+        $ids = array_values(array_map('intval', array_keys($replyIds)));
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $replyStmt = $mysqli->prepare("SELECT id, username, avatar, message FROM public_messages WHERE id IN ($placeholders)");
+        if ($replyStmt) {
+            $replyStmt->bind_param(str_repeat('i', count($ids)), ...$ids);
+            $replyStmt->execute();
+            $replyResult = $replyStmt->get_result();
+            while ($reply = $replyResult->fetch_assoc()) {
+                $replyMap[(int)$reply['id']] = [
+                    'message' => $parseMessage($reply['message']),
+                    'username' => $reply['username'],
+                    'avatar' => $reply['avatar'],
                 ];
             }
-            $reply_stmt->close();
+            $replyStmt->close();
         }
+    }
 
-        // 检查是否为文件消息，如果是则不进行Markdown解析
-        $isFileMessage = false;
-        if (is_string($row['message'])) {
-            $trimmed = trim($row['message']);
-            if (strpos($trimmed, '{') === 0) {
-                $decoded = json_decode($row['message'], true);
-                if ($decoded && isset($decoded['type']) && $decoded['type'] === 'file') {
-                    $isFileMessage = true;
-                }
-            }
-        }
-
-        if (!$isFileMessage) {
-            $row['message'] = customParseAllowHtml($row['message'], $parsedown);
-        }
-
-        if ($reply_to && !empty($reply_to['message'])) {
-            // 检查回复消息是否为文件消息
-            $isReplyFileMessage = false;
-            if (is_string($reply_to['message'])) {
-                $trimmed = trim($reply_to['message']);
-                if (strpos($trimmed, '{') === 0) {
-                    $decoded = json_decode($reply_to['message'], true);
-                    if ($decoded && isset($decoded['type']) && $decoded['type'] === 'file') {
-                        $isReplyFileMessage = true;
-                    }
-                }
-            }
-
-            if (!$isReplyFileMessage) {
-                $reply_to['message'] = customParseAllowHtml($reply_to['message'], $parsedown);
-            }
-        }
-
+    $messages = [];
+    foreach ($rows as $row) {
+        $replyId = !empty($row['reply_to_id']) ? (int)$row['reply_to_id'] : 0;
         $messages[] = [
-            'id' => $row['id'],
-            'user_id' => $row['user_id'],
+            'id' => (int)$row['id'],
+            'user_id' => (int)$row['user_id'],
             'username' => $row['username'],
             'avatar' => $row['avatar'],
-            'message' => $row['message'],
-            'reply_to' => $reply_to,
-            'timestamp' => $row['timestamp'],
+            'message' => $parseMessage($row['message']),
+            'reply_to' => $replyId > 0 ? ($replyMap[$replyId] ?? null) : null,
+            'timestamp' => (int)$row['timestamp'],
             'ip' => $row['ip'],
-            'recalled' => (bool)$row['recalled']
+            'recalled' => (bool)$row['recalled'],
         ];
     }
 
-    $stmt->close();
     $mysqli->close();
 
-    // 标记当前用户已读公聊消息
     markPublicMessagesAsRead($_SESSION['user_id']);
 
     echo json_encode([
         'success' => true,
-        'messages' => $messages, // 保持后端返回顺序：最新在前（new -> old）
+        'messages' => $messages,
         'hasMore' => $hasMore,
-        'count' => count($messages)
+        'count' => count($messages),
     ]);
-} catch (Exception $e) {
+} catch (Throwable $e) {
+    if (isset($mysqli) && $mysqli instanceof mysqli) {
+        $mysqli->close();
+    }
     echo json_encode(['success' => false, 'message' => '获取消息失败: ' . $e->getMessage()]);
 }

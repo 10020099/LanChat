@@ -32,24 +32,46 @@ function ensureAvatar(?string $avatar): string
     return $default;
 }
 
-function updateLastSeen(int $user_id): bool
+function updateLastSeen(int $user_id, ?mysqli $mysqli = null): bool
 {
+    global $config;
+
     $user_id = intval($user_id);
     if ($user_id <= 0) {
         return false;
     }
 
-    $mysqli = get_db_connection();
+    $interval = max(5, intval($config['presence_update_interval'] ?? 60));
+    $now = time();
+    $lastUpdatedAt = intval($_SESSION['last_seen_updated_at'] ?? 0);
+    if ($lastUpdatedAt > 0 && ($now - $lastUpdatedAt) < $interval) {
+        return true;
+    }
+
+    $shouldClose = !($mysqli instanceof mysqli);
+    if ($shouldClose) {
+        $mysqli = get_db_connection();
+    }
+
     $stmt = $mysqli->prepare("UPDATE users SET last_seen = NOW() WHERE id = ?");
     if (!$stmt) {
-        $mysqli->close();
+        if ($shouldClose) {
+            $mysqli->close();
+        }
         return false;
     }
 
     $stmt->bind_param("i", $user_id);
     $result = $stmt->execute();
     $stmt->close();
-    $mysqli->close();
+
+    if ($shouldClose) {
+        $mysqli->close();
+    }
+
+    if ($result) {
+        $_SESSION['last_seen_updated_at'] = $now;
+    }
 
     return $result;
 }
@@ -69,4 +91,43 @@ function getUserList(): array
     $stmt->close();
     $mysqli->close();
     return $users;
+}
+
+function getUserPresenceMap(?mysqli $mysqli = null, ?int $excludeUserId = null): array
+{
+    $shouldClose = !($mysqli instanceof mysqli);
+    if ($shouldClose) {
+        $mysqli = get_db_connection();
+    }
+
+    $query = 'SELECT id, UNIX_TIMESTAMP(last_seen) AS last_seen_ts FROM users';
+    if ($excludeUserId !== null && $excludeUserId > 0) {
+        $query .= ' WHERE id != ?';
+    }
+
+    $stmt = $mysqli->prepare($query);
+    if (!$stmt) {
+        if ($shouldClose) {
+            $mysqli->close();
+        }
+        return [];
+    }
+
+    if ($excludeUserId !== null && $excludeUserId > 0) {
+        $stmt->bind_param('i', $excludeUserId);
+    }
+
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $presenceMap = [];
+    while ($row = $result->fetch_assoc()) {
+        $presenceMap[(string)intval($row['id'])] = isset($row['last_seen_ts']) ? (int)$row['last_seen_ts'] : null;
+    }
+    $stmt->close();
+
+    if ($shouldClose) {
+        $mysqli->close();
+    }
+
+    return $presenceMap;
 }
